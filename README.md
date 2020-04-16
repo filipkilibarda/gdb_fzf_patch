@@ -1,9 +1,31 @@
 # gdbfzf
 Patch to integrate Fzf fuzzy finder with GDB history search
 
+# TODO
+- link to fzf
+- info about downloading GDB
+- initialize git repo
+
+```bash
+git init
+git add .
+git commit -m "initial commit"
+git apply ../gdb.patch
+```
+
+- if patch fails to apply, perhaps because context lines are different in your version than mine,
+  then you'll have to manually copy paste the changes
+- info about building
+   - all targets
+   - with python, etc.
+   - info about pwndbg
+- info about shell variables (`GDB_FZF_CMD`)
+
+<script src="https://gist.github.com/filipkilibarda/7a885aa72387e170a4d04b310d72e5c8.js"></script>
+
 ```diff
 diff --git a/readline/readline/emacs_keymap.c b/readline/readline/emacs_keymap.c
-index b5e53f4..0e3fc9b 100644
+index b5e53f4..c34a415 100644
 --- a/readline/readline/emacs_keymap.c
 +++ b/readline/readline/emacs_keymap.c
 @@ -50,7 +50,7 @@ KEYMAP_ENTRY_ARRAY emacs_standard_keymap = {
@@ -11,7 +33,7 @@ index b5e53f4..0e3fc9b 100644
    { ISFUNC, rl_get_previous_history },		/* Control-p */
    { ISFUNC, rl_quoted_insert },			/* Control-q */
 -  { ISFUNC, rl_reverse_search_history },	/* Control-r */
-+  { ISFUNC, rl_fzf_search_history },	/* Control-r */
++  { ISFUNC, rl_fzf_search_history },	        /* Control-r */
    { ISFUNC, rl_forward_search_history },	/* Control-s */
    { ISFUNC, rl_transpose_chars },		/* Control-t */
    { ISFUNC, rl_unix_line_discard },		/* Control-u */
@@ -29,13 +51,21 @@ index aaf144d..b7187c6 100644
    { "self-insert", rl_insert },
    { "set-mark", rl_set_mark },
 diff --git a/readline/readline/isearch.c b/readline/readline/isearch.c
-index d6c5904..aa8baf3 100644
+index d6c5904..f55b720 100644
 --- a/readline/readline/isearch.c
 +++ b/readline/readline/isearch.c
-@@ -136,6 +136,147 @@ rl_reverse_search_history (int sign, int key)
+@@ -32,6 +32,7 @@
+ #endif
+
+ #include <sys/types.h>
++#include <sys/wait.h>
+
+ #include <stdio.h>
+
+@@ -136,6 +137,112 @@ rl_reverse_search_history (int sign, int key)
    return (rl_search_history (-sign, key));
  }
- 
+
 +/* If NEW_LINE differs from what is in the readline line buffer, add an
 +   undo record to get from the readline line buffer contents to the new
 +   line and make NEW_LINE the current readline line. */
@@ -52,39 +82,6 @@ index d6c5904..aa8baf3 100644
 +      rl_insert_text (new_line);
 +      rl_add_undo (UNDO_END, 0, 0, 0);
 +    }
-+}
-+
-+char *
-+escape_quotes(char *s)
-+{
-+  char c;
-+  size_t len_s  = strlen(s);
-+  size_t len_ss = len_s*4 + 1;		// Large enough that no resizing necessary
-+  char *ss = (char *) calloc(len_ss, 1);
-+
-+  if (ss == NULL) {
-+    printf("Failed to alloc string");
-+    exit(1);
-+  }
-+
-+  size_t i = 0;
-+  size_t j = 0;
-+  while (1) {
-+    if (i == len_s) {
-+      break;
-+    }
-+    c = s[i];
-+    if (c == '\'') {
-+      strcpy(&ss[j], "'\\''");
-+      j += 4;
-+    } else {
-+      ss[j] = c;
-+      j += 1;
-+    }
-+    i += 1;
-+  }
-+
-+  return ss;
 +}
 +
 +int
@@ -111,18 +108,17 @@ index d6c5904..aa8baf3 100644
 +    close(parent_read);
 +    close(parent_write);
 +
-+    char *shellcmd;
-+    char *escaped_line = escape_quotes(rl_line_buffer);
++    // Pass the current prompt into fzf as its initial search string. Use environment variables to
++    // get around the need for escaping quotes in commands
++    setenv("RL_LINE_BUFFER", rl_line_buffer, 1);
 +
-+    // TODO read0 and print0 options should be hardcoded, not in the shell command
-+    if (asprintf(&shellcmd, "fzf $GDB_FZF_OPTS --query='%s'", escaped_line) == -1) {
-+      puts("Failed to allocate string");
-+      exit(-1);
-+    }
-+
-+    free(escaped_line);
-+
-+    char *argv[] = { "/bin/sh", "-c", shellcmd, NULL };
++    char *argv[] = {
++	"/bin/sh",
++	"-c",
++	"fzf --print0 --read0 --tiebreak=index --no-multi --height=40\% --layout=reverse "
++	  "--tac $GDB_FZF_OPTS --query=\"$RL_LINE_BUFFER\"",
++	NULL
++    };
 +    execve(argv[0], argv, environ);
 +    exit(-1);			// if execve returns it failed
 +  }
@@ -152,6 +148,7 @@ index d6c5904..aa8baf3 100644
 +  char gdb_cmd[MAX_CMD_LEN];
 +  gdb_cmd[MAX_CMD_LEN-1] = '\0';
 +
++  // Read output from FZF until a NULL byte is encountered
 +  int c;
 +  for (int i = 0; i < MAX_CMD_LEN-1; i++) {
 +    c = fgetc(in);
@@ -162,7 +159,7 @@ index d6c5904..aa8baf3 100644
 +    gdb_cmd[i] = (char) c;
 +    if (c == '\0') break;
 +  }
-+  
++
 +  // Wait for the child to terminate. If it doesn't terminate, the program will just hang and we'll
 +  // know there's an issue with the child not exiting.
 +  waitpid(child, NULL, 0);
@@ -170,11 +167,9 @@ index d6c5904..aa8baf3 100644
 +  // Don't bother checking for a success return code b/c sometimes we kill it w/ C-c
 +
 +  maybe_make_readline_line(gdb_cmd);
-+
-+  // THIS IS PROBABLY WHAT i WANT B/C NO CLEAR LINE TERMCAP
 +  rl_forced_update_display();
 +
-+  return 0; // XXX Guessing ret val
++  return 0;
 +}
 +
  /* Search forwards through the history looking for a string which is typed
@@ -185,13 +180,11 @@ index da78271..3406e93 100644
 --- a/readline/readline/readline.h
 +++ b/readline/readline/readline.h
 @@ -183,6 +183,7 @@ extern int rl_paste_from_clipboard PARAMS((int, int));
- 
+
  /* Bindable commands for incremental searching. */
  extern int rl_reverse_search_history PARAMS((int, int));
 +extern int rl_fzf_search_history PARAMS((int, int));
  extern int rl_forward_search_history PARAMS((int, int));
- 
+
  /* Bindable keyboard macro commands. */
 ```
-
-
