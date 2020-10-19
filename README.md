@@ -1,6 +1,16 @@
-Patch to integrate [FZF fuzzy finder](https://github.com/junegunn/fzf) with GDB history search
-
 ![example](example.gif)
+
+
+This is a patch for GDB that integrates [FZF fuzzy finder](https://github.com/junegunn/fzf) with GDB's history search.
+
+FZF works with Bash history search out of the box. It uses Bash's `bind` builtin with the `-x` option. See `man bash`. This feature allows for binding arbitrary shell commands to keyboard shortcuts and, most importantly, it allows these commands to modify the `readline` prompt buffer.
+
+GDB does not have such a feature, so customization is the only option.
+
+This patch modifies GDB's `readline` module such that it calls into FZF when <kbd>Ctrl+R</kbd> is pressed, rather than the default reverse_search implementation. It works by forking FZF, piping GDB's history into it, reading the user's selection from FZF, then populating the readline prompt buffer with the selection.
+
+
+# Installation
 
 Download [GDB source code](https://ftp.gnu.org/gnu/gdb/). The latest version *probably* has the fewest bugs.
 
