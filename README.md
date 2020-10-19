@@ -12,7 +12,7 @@ This patch modifies GDB's `readline` module such that it calls into FZF when <kb
 
 # Installation
 
-Download [GDB source code](https://ftp.gnu.org/gnu/gdb/). The latest version *probably* has the fewest bugs.
+Download [GDB source code](https://ftp.gnu.org/gnu/gdb/). I like to stay on the latest version.
 
 Grab my patch [gdb.patch](gdb.patch).
 
